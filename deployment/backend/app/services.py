@@ -1,17 +1,19 @@
-# Реализует бизнес-логику (например, обучение моделей, предсказания)
-
+import os
+import time
 import pandas as pd
 import numpy as np
+
 from fastapi import HTTPException
 from fastapi.responses import FileResponse
 from sklearn.model_selection import train_test_split
-from sklearn.linear_model import LinearRegression, LogisticRegression
-import os
-from deployment.backend.app.preprocessing import preproc
-from deployment.backend.app.class_model import FullModel
-from deployment.backend.app.preprocessing_x import preproc_x
 
-# In-memory storage for models and data
+from app.preprocessing import preproc
+from app.class_model import FullModel
+from app.preprocessing_x import preproc_x
+import logging
+
+logger = logging.getLogger("file-logger")
+
 models = {}
 is_log_models = []
 datasets = {}
@@ -20,183 +22,206 @@ learning_curves = {}
 loaded_model = None
 preproc_pipeline = None
 
+
 async def upload_csv_dataset(file):
+    logger.info(f"Загрузка CSV: имя файла = {file.filename}")
     try:
-        # Save uploaded file temporarily
         temp_file_path = f"/tmp/{file.filename}"
         with open(temp_file_path, "wb") as temp_file:
             temp_file.write(await file.read())
-
-        # Load the CSV into a DataFrame
         df = pd.read_csv(temp_file_path)
         datasets["current"] = df
         os.remove(temp_file_path)
-
-        return {"message": "CSV dataset uploaded successfully", "df.isnull": df.isnull().sum().to_dict()}
+        logger.info("CSV файл успешно загружен")
+        return {
+            "message": "CSV файл успешно загружен",
+            "df.isnull": df.isnull().sum().to_dict()
+        }
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to process CSV file: {str(e)}")
+        logger.error(f"Не удалось обработать CSV файл: {e}", exc_info=True)
+        raise HTTPException(status_code=400, detail=f"Не удалось обработать CSV файл: {str(e)}")
 
 
 def perform_eda():
+    logger.info("Запущен EDA на текущем наборе данных")
     if "current" not in datasets:
-        raise HTTPException(status_code=404, detail="No dataset uploaded")
+        logger.error("Отсутствует загруженный набор данных для EDA")
+        raise HTTPException(status_code=404, detail="Набор данных не загружен")
     df = datasets["current"]
-    return {
-        "statistics": df.describe().to_dict(),
-    }
+    result = {"statistics": df.describe().to_dict()}
+    logger.info("EDA успешно выполнен")
+    return result
+
 
 def preprocessing_data():
     global preproc_pipeline
+    logger.info("Начата предобработка данных")
     if "current" not in datasets:
-        raise HTTPException(status_code=404, detail="No dataset uploaded")
-    df = datasets["current"]
-    train, test, preproc_pipeline = preproc(df)
-    datasets_prep["current"] = [train, test]
-    return {"message": "Preprocessing of the dataset was successful.", "train": train.to_dict()}
+        logger.error("Отсутствует загруженный набор данных для предобработки")
+        raise HTTPException(status_code=404, detail="Набор данных не загружен")
+    try:
+        df = datasets["current"]
+        train, test, preproc_pipeline = preproc(df)
+        datasets_prep["current"] = [train, test]
+        logger.info("Предобработка данных завершена")
+        return {
+            "message": "Предобработка данных завершена",
+            "train": train.to_dict()
+        }
+    except Exception as e:
+        logger.error(f"Ошибка при предобработке данных: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Предобработка не удалась: {e}")
+
 
 def train_model(config):
+    logger.info(f"Начато обучение модели id={config.id}, тип={config.ml_model_type}")
     if config.id in models:
-        raise HTTPException(status_code=400, detail=f"Model '{config.id}' already exists")
-    if config.ml_model_type == "full":
-        model = FullModel(config.hyperparameters)
-        # Подготовка данных
-        X_train, y_train, X_test, y_test = model.prepare_data(datasets_prep["current"][0], datasets_prep["current"][1])
-        # Построение пайплайна
-        model.build_pipeline(X_train)
-        # Обучение модели
-        model.train_model(X_train, y_train)
-        # Оценка модели
-        r2 = model.evaluate_model(X_test, y_test)
-        # Предсказание
-        predictions = model.predict(X_test)
-        models[config.id] = model
-        is_log_models.append(config.id)
-        learning_curves[config.id] = model.learning_curve(X_train, y_train, X_test, y_test)
-    elif config.ml_model_type == "poly":
-        model = FullModel(config.hyperparameters)
-        # Подготовка данных
-        X_train, y_train, X_test, y_test = model.prepare_data(datasets_prep["current"][0], datasets_prep["current"][1])
-        # Убираем логарифмирование целевой переменной
-        y_train = np.exp(y_train)
-        y_test = np.exp(y_test)
-        # Построение пайплайна
-        model.build_pipeline(X_train)
-        # Обучение модели
-        model.train_model(X_train, y_train)
-        # Оценка модели
-        r2 = model.evaluate_model(X_test, y_test)
-        # Предсказание
-        predictions = model.predict(X_test)
-        models[config.id] = model
-        learning_curves[config.id] = model.learning_curve(X_train, y_train, X_test, y_test)
-    elif config.ml_model_type == "ohe":
-        model = FullModel(config.hyperparameters)
-        # Подготовка данных
-        X_train, y_train, X_test, y_test = model.prepare_data(datasets_prep["current"][0], datasets_prep["current"][1])
-        # Убираем логарифмирование целевой переменной
-        y_train = np.exp(y_train)
-        y_test = np.exp(y_test)
-        # Построение пайплайна без полиномиальных признаков
-        model.build_pipeline_cat(X_train)
-        # Обучение модели
-        model.train_model(X_train, y_train)
-        # Оценка модели
-        r2 = model.evaluate_model(X_test, y_test)
-        # Предсказание
-        predictions = model.predict(X_test)
-        models[config.id] = model
-        learning_curves[config.id] = model.learning_curve(X_train, y_train, X_test, y_test)
-    else:
-        raise HTTPException(status_code=400, detail="Unsupported model type")
-    return {"message": "Model trained successfully", "model": f" '{config.id}', r2: {round(r2, 4)}"}
+        logger.error(f"Модель с id='{config.id}' уже существует")
+        raise HTTPException(status_code=400, detail=f"Модель '{config.id}' уже существует")
+    try:
+        if config.ml_model_type == "full":
+            model = FullModel(config.hyperparameters)
+            X_train, y_train, X_test, y_test = model.prepare_data(
+                datasets_prep["current"][0], datasets_prep["current"][1]
+            )
+
+            logger.info(f"Построение pipeline и обучение модели id={config.id}")
+            model.build_pipeline(X_train)
+            start_time = time.time()
+            model.train_model(X_train, y_train)
+            duration = time.time() - start_time
+
+            r2 = model.evaluate_model(X_test, y_test)
+            predictions = model.predict(X_test)
+
+            models[config.id] = model
+            is_log_models.append(config.id)
+            learning_curves[config.id] = model.learning_curve(
+                X_train, y_train, X_test, y_test
+            )
+            logger.info(f"Модель '{config.id}' обучена успешно, R2={round(r2, 4)}, время обучения={duration:.2f}s")
+        else:
+            logger.error(f"Тип модели '{config.ml_model_type}' не поддерживается")
+            raise HTTPException(status_code=400, detail=f"Тип модели '{config.ml_model_type}' не поддерживается")
+
+        return {
+            "message": f"Модель '{config.id}' обучена успешно, R2={round(r2, 4)}"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Обучение модели '{config.id}' завершилось ошибкой: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Обучение не удалось: {e}")
+
 
 def load_model_endpoint(request):
     global loaded_model
     model_id = request.id
-
+    logger.info(f"Запрошена загрузка модели id={model_id}")
     if model_id not in models:
-        raise HTTPException(status_code=404, detail="Model not found.")
-
+        logger.error(f"Модель '{model_id}' не найдена для загрузки")
+        raise HTTPException(status_code=404, detail="Модель не найдена")
     loaded_model = models[model_id]
-    return {"message": f"Model '{model_id}' loaded"}
+    logger.info(f"Модель '{model_id}' успешно загружена")
+    return {"message": f"Модель '{model_id}' загружена"}
+
 
 def unload_model_endpoint():
     global loaded_model
+    logger.info("Запрошена выгрузка текущей модели")
     if not loaded_model:
-        raise HTTPException(status_code=400, detail="No model loaded.")
-
+        logger.error("Нет загруженной модели для выгрузки")
+        raise HTTPException(status_code=400, detail="Нет загруженной модели")
     loaded_model = None
-    return {"message": "Model unloaded"}
+    logger.info("Текущая модель успешно выгружена")
+    return {"message": "Модель выгружена"}
+
 
 def list_learning_curve(model_id):
+    logger.info(f"Запрошены данные кривой обучения для модели id={model_id}")
     if model_id not in models:
-        raise HTTPException(status_code=404, detail="Model not found.")
-    # return {f"learning curve": learning_curves[model_id]}
+        logger.error(f"Модель '{model_id}' не найдена для построения кривой")
+        raise HTTPException(status_code=404, detail="Модель не найдена")
     return learning_curves[model_id]
 
+
 def make_prediction(model_id, data):
-    global preproc_pipeline  # Убедимся, что используем глобальную переменную
-
-    # Проверка на существование модели
+    logger.info(f"Запрошено предсказание для модели id={model_id}, данные={data}")
+    global preproc_pipeline
     if model_id not in models:
-        raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
-    model = models[model_id]
-
-    # Проверка на инициализацию пайплайна
+        logger.error(f"Модель '{model_id}' не найдена для предсказания")
+        raise HTTPException(status_code=404, detail=f"Модель '{model_id}' не найдена")
     if preproc_pipeline is None:
-        raise HTTPException(status_code=500, detail="Preprocessing pipeline is not initialized. Please preprocess the data first.")
-
-    # Попытка преобразовать входные данные в DataFrame
+        logger.error("Предсказание не выполнено: пайплайн предобработки не инициализирован")
+        raise HTTPException(status_code=500, detail="Пайплайн предобработки не инициализирован")
     try:
         input_data = pd.DataFrame([data])
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid input data format: {e}")
+        logger.error(f"Неверный формат входных данных: {e}", exc_info=True)
+        raise HTTPException(status_code=400, detail=f"Неверный формат входных данных: {e}")
 
-    # Предобработка и предсказание
     try:
-        # Применяем пайплайн предобработки
         processed_data = preproc_pipeline.transform(input_data)
-        # Выполняем предсказание
-        predictions = model.predict(processed_data)
+        raw_preds = models[model_id].predict(processed_data)
         if model_id in is_log_models:
-            predictions = np.exp(predictions)
+            predictions = np.exp(raw_preds)
+        else:
+            predictions = raw_preds
+        logger.info(f"Предсказание для модели '{model_id}' выполнено: {predictions.tolist()}")
         return {"predictions": predictions.tolist()}
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Prediction failed: {e}")
+        logger.error(f"Ошибка при предсказании для модели '{model_id}': {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Ошибка при предсказании: {e}")
+
 
 async def predict_items(file):
+    logger.info(f"Запрошено пакетное предсказание, файл = '{file.filename}'")
     global loaded_model
     if not loaded_model:
-        raise HTTPException(status_code=400, detail="No model loaded.")
-    # Save uploaded file temporarily
-    temp_file_path = f"/tmp/{file.filename}"
-    with open(temp_file_path, "wb") as temp_file:
-        temp_file.write(await file.read())
-    # Load the CSV into a DataFrame
-    X = pd.read_csv(temp_file_path)
-    os.remove(temp_file_path)
+        logger.error("Пакетное предсказание не выполнено: нет загруженной модели")
+        raise HTTPException(status_code=400, detail="Нет загруженной модели")
+    try:
+        temp_file_path = f"/tmp/{file.filename}"
+        with open(temp_file_path, "wb") as temp_file:
+            temp_file.write(await file.read())
+        df = pd.read_csv(temp_file_path)
+        os.remove(temp_file_path)
+        df['predict'] = pd.Series(loaded_model.predict(preproc_x(df)))
+        df.to_csv('predictions.csv', index=False)
+        logger.info("Пакетное предсказание успешно выполнено, возвращаем CSV")
+        return FileResponse(
+            path='predictions.csv',
+            media_type='text/csv',
+            filename='predictions.csv'
+        )
+    except Exception as e:
+        logger.error(f"Пакетное предсказание завершилось ошибкой: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Пакетное предсказание не удалось: {e}")
 
-    output = X
-
-    X['predict'] = pd.Series(loaded_model.predict(preproc_x(X)))
-    output['predict'] = X['predict']
-    output.to_csv('predictions.csv', index=False)
-    response = FileResponse(path='predictions.csv',
-                            media_type='text/csv', filename='predictions.csv')
-    return response
 
 def list_models():
+    logger.info("Запрошен список всех моделей")
     return {"models": list(models.keys())}
 
-def remove_model(model_id: str):
-    if model_id not in models:
-        raise HTTPException(status_code=404, detail="Model not found.")
 
+def remove_model(model_id: str):
+    logger.info(f"Запрошено удаление модели id={model_id}")
+    if model_id not in models:
+        logger.error(f"Удаление не выполнено: модель '{model_id}' не найдена")
+        raise HTTPException(status_code=404, detail="Модель не найдена")
     del models[model_id]
     del learning_curves[model_id]
     is_log_models.remove(model_id)
-    return {"message": f"Model '{model_id}' removed"}
+    logger.info(f"Модель '{model_id}' удалена")
+    return {"message": f"Модель '{model_id}' удалена"}
+
 
 def remove_all_models():
+    logger.info("Запрошено удаление всех моделей")
     models.clear()
-    return {"message": "All models removed"}
+    learning_curves.clear()
+    is_log_models.clear()
+    logger.info("Все модели успешно удалены")
+    return {"message": "Все модели удалены"}

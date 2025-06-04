@@ -1,0 +1,4 @@
+http.host: "0.0.0.0"
+
+xpack.security.enabled: false # Disable security features так для тестов
+xpack.license.self_generated.type: basic 

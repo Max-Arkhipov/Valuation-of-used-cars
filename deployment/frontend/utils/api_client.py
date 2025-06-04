@@ -1,8 +1,9 @@
 # Клиент для взаимодействия с FastAPI
+import os
 import streamlit as st
 import requests
 
-API_BASE_URL = "http://localhost:8000"
+API_BASE_URL = os.getenv("API_BASE_URL", "http://backend:8000")
 
 @st.cache_data
 def upload_file(endpoint, file=None):
@@ -35,8 +36,8 @@ def train_model(model_id, model_type, alpha, endpoint):
         response = requests.post(url, json={"config": config})
         return response
     except Exception as e:
-        st.error(f"Ошибка предобработки датасета через API: {e}")
-        return f"Ошибка предобработки датасета через API: {e}"
+        st.error(f"Ошибка обучения модели через API: {e}")
+        return f"Ошибка обучения модели через API: {e}"
 
 def list_models(endpoint):
     url = f"{API_BASE_URL}/{endpoint}"
@@ -53,9 +54,8 @@ def learning_curve(endpoint, model_id):
         response = requests.post(url, json={"id": model_id})
         return response
     except Exception as e:
-        st.error(f"Ошибка при загрузке списка обученных моделей: {e}")
-        return f"Ошибка при загрузке списка обученных моделей: {e}"
-
+        st.error(f"Ошибка при загрузке кривой обучения: {e}")
+        return f"Ошибка при загрузке кривой обучения: {e}"
 
 def make_prediction(endpoint, model_id, input_data):
     """
