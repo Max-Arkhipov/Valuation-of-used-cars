@@ -1,7 +1,7 @@
 # Страница обучения моделей
 import streamlit as st
 import requests
-from deployment.frontend.utils.api_client import *
+from utils.api_client import *
 
 def show_page():
     st.header("Обучение модели")
@@ -37,7 +37,8 @@ def show_page():
             if response.status_code == 200:
                 result = response.json()
                 st.success(result['message'])
-                st.write(f"Сообщение: {result['model']}")
+                st.write(f"Сообщение: {result['message']}")
+
             else:
                 st.error(f"Ошибка: {response.json()['detail']}")
 

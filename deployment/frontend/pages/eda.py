@@ -3,7 +3,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
 from phik import phik_matrix
-from deployment.frontend.utils.api_client import *
+from utils.api_client import *
 
 def show_page():
     st.header("Анализ данных")

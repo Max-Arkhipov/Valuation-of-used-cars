@@ -2,7 +2,7 @@
 import json
 import pandas as pd
 import streamlit as st
-from deployment.frontend.utils.api_client import *
+from utils.api_client import *
 
 
 def show_page():
